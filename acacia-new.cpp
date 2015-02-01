@@ -31,6 +31,8 @@
 #include <png.h>
 #include <assert.h>
 #include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <sys/time.h>
 
 #include <GL/gl.h>
@@ -127,6 +129,11 @@ GLX_ALPHA_SIZE, 8,
 GLX_DEPTH_SIZE, 16,
 None
 };
+
+double logbase(double a, double base)
+{
+   return log(a) / log(base);
+}
  
 // This Holds All Of The Information Related To Any
 // FreeType Font That We Want To Create. 
@@ -924,10 +931,11 @@ Img line;
 class File {
     public:
         File();
-        File(string);
+        File(string, long);
         void draw(float opacity=1, bool isSelected=false);
         string path;
         string name;
+        long size;
         float toffset;
         int nodetype;
         int filetype;
@@ -939,6 +947,7 @@ class File {
 };
 File::File() {
     name = "";
+    size = 0;
     toffset = 32767;
     nodetype = TYPE_FILE;
     filetype = BINARY;
@@ -947,8 +956,9 @@ File::File() {
     selectedOpacity = 0;
     selectedVelocity = 0;
 }
-File::File(string pth) {
+File::File(string pth, long bytes) {
     path = pth;
+    size = bytes;
     nodetype = TYPE_FILE;
     toffset = 32767;
 
@@ -1078,7 +1088,7 @@ File FILE_NOT_FOUND;
 class Folder : public File {
     public:
         // Get initializer from File. Probably.
-        Folder(string);// : File(string) {};
+        Folder(string, long);// : File(string) {};
         vector<File *> children;
         // void read();
         void read(int);
@@ -1105,11 +1115,13 @@ void GetFilesInDirectory(std::vector<File *> &out, const string &directory, int 
             thefile.append(epdf->d_name);
             if (epdf->d_type==DT_REG) {
                 // printf("%s: %s\n", "File", thefile.c_str());
-                out.push_back(new File(thefile));
+                struct stat filestatus;
+                stat( thefile.c_str(), &filestatus );
+                out.push_back(new File(thefile, filestatus.st_size));
             } else if (epdf->d_type==DT_DIR) {
                 thefile.append("/");
                 // printf("%s: %s\n", "Folder",thefile.c_str());
-                Folder *f = new Folder(thefile);
+                Folder *f = new Folder(thefile, 0);
                 if (levelsleft>0) {
                     (*f).read(levelsleft-1);
                 }
@@ -1121,8 +1133,9 @@ void GetFilesInDirectory(std::vector<File *> &out, const string &directory, int 
     sort (out.begin(), out.end(), comparefilenames);
 }
 
-Folder::Folder(string pth) {
+Folder::Folder(string pth, long bytes) {
     toffset = 32767;
+    size = bytes;
     path = pth;
     uint idx = pth.rfind('/',pth.size()-2);
     if(idx != std::string::npos) {
@@ -1139,7 +1152,7 @@ Folder::Folder(string pth) {
     selectedChildIndex = -1;
 }
 
-Folder root("/home/skyler/Dropbox/");
+Folder root("/home/skyler/Dropbox/", 0);
 void Folder::read(int levelsleft=1) {
     GetFilesInDirectory(children,path,levelsleft);
 }
@@ -1188,8 +1201,32 @@ void Folder::draw(float opacity, int level, bool isSelected) {
         glColor3f(1,1,1);
         if (selectedChildIndex == -1) {
             toffset = -gprint(our_font, toffset, -128, name.c_str());
+            gprint (our_font, toffset, -148, "%i Items", s);
         } else {
             toffset = -gprint(our_font, toffset, -128, (*children.at(selectedChildIndex)).name.c_str());
+            if ((*children.at(selectedChildIndex)).nodetype==TYPE_FOLDER) {
+                gprint (our_font, toffset, -148, "%i Items", (*(Folder*)(children.at(selectedChildIndex))).children.size());
+            } else {
+                long childsize = (*children.at(selectedChildIndex)).size;
+                string expstr;
+                if (childsize>1023) {
+                    if (childsize>1048576) {
+                        if (childsize>1073741824) {
+                            if (childsize>1099511627776) {
+                               gprint (our_font, toffset, -148, "%i TB", childsize/1099511627776);
+                            } else {
+                               gprint (our_font, toffset, -148, "%i GB", childsize/1073741824);
+                            }
+                        } else {
+                           gprint (our_font, toffset, -148, "%i MB", childsize/1048576);
+                        }
+                    } else {
+                       gprint (our_font, toffset, -148, "%i KB", childsize/1024);
+                    }
+                } else {
+                    gprint (our_font, toffset, -148, "%i Bytes", childsize);
+                }
+            }
         }
     }
 
@@ -1223,7 +1260,7 @@ void Folder::draw(float opacity, int level, bool isSelected) {
             (*children.at(i)).hoverVelocity = (*children.at(i)).hoverVelocity+((hoverVelocityTarget-(*children.at(i)).hoverVelocity)/100000)*delta_t;
             // Yes, I'm using Euler integration. So sue me. It's fast, and the decaying exponentials cancel out any energy gain.
             (*children.at(i)).hoverScaleFactor = (*children.at(i)).hoverScaleFactor+(*children.at(i)).hoverVelocity*delta_t;
-            localScaleFactor = scaleFactor+(*children.at(i)).hoverScaleFactor*scaleFactor*0.5;
+            localScaleFactor = (scaleFactor+(*children.at(i)).hoverScaleFactor*scaleFactor*0.5) * (logbase ((*children.at(i)).size+1000,1000));
             glScalef(localScaleFactor,localScaleFactor,localScaleFactor);
             float child_opacity = 1;
             if (children.size()>24) {
@@ -1270,7 +1307,7 @@ void Folder::click(float opacity) {
         } else {
             parent = "/";
         }
-        root = *(new Folder(parent));
+        root = *(new Folder(parent, 0));
         root.read(1);
     }
     for (int i=0; i<s; i++) {
