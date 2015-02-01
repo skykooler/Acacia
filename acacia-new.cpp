@@ -100,6 +100,8 @@ float blue = 1.0;
 
 int mouse_x, mouse_y;
 int button;
+long key;
+bool mousecontrol = false;
 
 static int Xscreen;
 static Atom del_atom;
@@ -411,6 +413,7 @@ long long timeval_diff(struct timeval *difference, struct timeval *end_time, str
 } /* timeval_diff() */
 
 void clickRoot();
+void pressRoot();
 
 static int isExtensionSupported(const char *extList, const char *extension) {
 
@@ -701,12 +704,22 @@ static int updateTheMessageQueue() {
         case MotionNotify:
             mouse_x = event.xbutton.x;
             mouse_y = height-event.xbutton.y;
+            mousecontrol = true;
             break;
 
         case ConfigureNotify:
             xc = &(event.xconfigure);
             width = xc->width;
             height = xc->height;
+            break;
+        case KeyPress:
+            key = XLookupKeysym (&event.xkey, 0);
+            mousecontrol = false;
+            pressRoot();
+            break;
+        case KeyRelease:
+            printf ("key #%ld was released.\n",
+             (long) XLookupKeysym (&event.xkey, 0));
             break;
         }
     }
@@ -1069,7 +1082,7 @@ class Folder : public File {
         void click(float opacity=1);
         void transform(float opacity=1);
         Folder * openChild;
-        int openChildIndex;
+        int selectedChildIndex;
 };
 
 void GetFilesInDirectory(std::vector<File *> &out, const string &directory, int levelsleft) {
@@ -1118,7 +1131,7 @@ Folder::Folder(string pth) {
     selectedOpacity = 0;
     selectedVelocity = 0;
     openChild = (Folder *)&FILE_NOT_FOUND;
-    openChildIndex = -1;
+    selectedChildIndex = -1;
 }
 
 Folder root("/home/skyler/Dropbox/");
@@ -1154,8 +1167,9 @@ void Folder::draw(float opacity, int level, bool isSelected) {
     int s = children.size();
 
     int closestChild;
-    if (sqrt(mouse_x*mouse_x + mouse_y*mouse_y) < 256*opacity + 32 && s > 0) {
+    if (sqrt(mouse_x*mouse_x + mouse_y*mouse_y) < 256*opacity + 32 && s > 0 && mousecontrol) {
         closestChild = ((int)(s*mousetheta/(pi*2)+0.5)) % s;
+        selectedChildIndex = closestChild;
     } else {
         closestChild = -1;
     }
@@ -1163,10 +1177,10 @@ void Folder::draw(float opacity, int level, bool isSelected) {
     if (level==1) {
         glEnable(GL_TEXTURE_2D);
         glColor3f(1,1,1);
-        if (closestChild == -1) {
+        if (selectedChildIndex == -1) {
             toffset = -gprint(our_font, toffset, -128, name.c_str());
         } else {
-            toffset = -gprint(our_font, toffset, -128, (*children.at(closestChild)).name.c_str());
+            toffset = -gprint(our_font, toffset, -128, (*children.at(selectedChildIndex)).name.c_str());
         }
     }
 
@@ -1190,7 +1204,7 @@ void Folder::draw(float opacity, int level, bool isSelected) {
             mouse_x = (mouse_x-x)/localScaleFactor;
             mouse_y = (mouse_y-y)/localScaleFactor;
             float hoverVelocityTarget;
-            if (i==closestChild) {
+            if (i==selectedChildIndex) {
                 // Set a target for the velocity of what it would be if we just used a straight exponential ease
                 hoverVelocityTarget = ((1-(*children.at(i)).hoverScaleFactor)/100000);
             } else {
@@ -1208,10 +1222,10 @@ void Folder::draw(float opacity, int level, bool isSelected) {
             }
             switch ((*children.at(i)).nodetype) {
                 case TYPE_FILE:
-                    (*(children.at(i))).draw(child_opacity*Falloff, (level==1 && closestChild==i) ? true : false);
+                    (*(children.at(i))).draw(child_opacity*Falloff, (level==1 && selectedChildIndex==i) ? true : false);
                     break;
                 case TYPE_FOLDER:
-                    (*(Folder*)(children.at(i))).draw(child_opacity*Falloff, level+1, (level==1 && closestChild==i) ? true : false);
+                    (*(Folder*)(children.at(i))).draw(child_opacity*Falloff, level+1, (level==1 && selectedChildIndex==i) ? true : false);
                     break;
             }
             mouse_y = sub_last_mouse_y;
@@ -1261,7 +1275,7 @@ void Folder::click(float opacity) {
                     root = (*((Folder *)(children.at(i))));
                     root.read(1);
             }
-            printf("%i\n", openChildIndex);
+            printf("%i\n", selectedChildIndex);
             break;
         }
         mouse_x = sub_last_mouse_x;
@@ -1273,7 +1287,7 @@ void Folder::click(float opacity) {
 
 void Folder::transform(float opacity){
     if (not (openChild==(Folder *)&FILE_NOT_FOUND)) {
-        float theta = ((float)openChildIndex)/(float)(children.size())*2*pi;
+        float theta = ((float)selectedChildIndex)/(float)(children.size())*2*pi;
         float x = 256*opacity*sin(theta);
         float y = 256*opacity*cos(theta);
         glScalef(1/scaleFactor,1/scaleFactor,1/scaleFactor);
@@ -1291,6 +1305,50 @@ void clickRoot() {
     root.click();
     mouse_x = last_mouse_x;
     mouse_y = last_mouse_y;
+}
+
+void pressRoot() {
+    uint s = root.children.size();
+    switch (key) {
+    case 65364: // Down
+        if (root.selectedChildIndex==-1) {
+            root.selectedChildIndex = (int)(s/2);
+        } else if (root.selectedChildIndex<s/2.0 && root.selectedChildIndex >= 0) {
+            root.selectedChildIndex += 1;
+        } else if (root.selectedChildIndex>=s/2.0) {
+            root.selectedChildIndex -= 1;
+        }
+        break;
+    case 65362: // Up
+        if (root.selectedChildIndex==-1) {
+            root.selectedChildIndex = 0;
+        } else if (root.selectedChildIndex<s/2.0 && root.selectedChildIndex > 0) {
+            root.selectedChildIndex -= 1;
+        } else if (root.selectedChildIndex>=s/2.0 && s > 0) {
+            root.selectedChildIndex = (root.selectedChildIndex + 1) % s;
+        }
+        break;
+    case 65361: // Left
+        if (root.selectedChildIndex==-1) {
+            root.selectedChildIndex = (int)(s*3/4);
+        } else if (root.selectedChildIndex<s*3/4.0 && root.selectedChildIndex > s/4.0) {
+            root.selectedChildIndex += 1;
+        } else if (s > 0) {
+            root.selectedChildIndex = (root.selectedChildIndex - 1 + s) % s;
+        }
+        break;
+    case 65363: // Right
+        if (root.selectedChildIndex==-1) {
+            root.selectedChildIndex = (int)(s/4);
+        } else if (root.selectedChildIndex<s*3/4.0 && root.selectedChildIndex > s/4.0) {
+            root.selectedChildIndex -= 1;
+        } else if (s > 0) {
+            root.selectedChildIndex = (root.selectedChildIndex + 1) % s;
+        }
+        break;
+    default:
+        break;
+    }
 }
 
 static void redrawTheWindow()
@@ -1320,8 +1378,10 @@ static void redrawTheWindow()
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    /* COLOR */
-    // draw_img(width/2-128,height/2-128,256,256,circle.tex,red,green,blue,1.0);
+
+    glEnable(GL_TEXTURE_2D);
+    glColor3f(1,1,1);
+    gprint(our_font, 5, 5, root.path.c_str());
     glTranslatef(width/2,height/2,0);
     int last_mouse_x = mouse_x;
     int last_mouse_y = mouse_y;
@@ -1331,11 +1391,6 @@ static void redrawTheWindow()
     root.draw();
     mouse_x = last_mouse_x;
     mouse_y = last_mouse_y;
-
-    // glCullFace(GL_FRONT);
-    // draw_cube();
-    // glCullFace(GL_BACK);
-    // draw_cube();
 
     a = fmod(a+0.1, 360.);
     b = fmod(b+0.5, 360.);
