@@ -1166,7 +1166,6 @@ void Folder::draw(float opacity, int level, bool isSelected) {
         if (closestChild == -1) {
             toffset = -gprint(our_font, toffset, -128, name.c_str());
         } else {
-            printf("closestChild: %i; mousetheta: %f\n", closestChild, mousetheta);
             toffset = -gprint(our_font, toffset, -128, (*children.at(closestChild)).name.c_str());
         }
     }
@@ -1241,6 +1240,15 @@ void Folder::click(float opacity) {
         closestChild = s*mousetheta/(pi*2)+0.5;
     } else {
         closestChild = -1;
+        uint idx = path.rfind('/',path.size()-2);
+        string parent;
+        if(idx != std::string::npos) {
+            parent = path.substr(0,idx+1);
+        } else {
+            parent = "/";
+        }
+        root = *(new Folder(parent));
+        root.read(1);
     }
     for (int i=0; i<s; i++) {
         if (i == closestChild) {
