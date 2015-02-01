@@ -1142,33 +1142,38 @@ void Folder::draw(float opacity, int level, bool isSelected) {
     selectedOpacity = selectedOpacity+selectedVelocity*delta_t;
 
     draw_img(-128,-128,256,256,circle.tex,red,green,blue,selectedOpacity);
-
-    if (level==1) {
-        glEnable(GL_TEXTURE_2D);
-        glColor3f(1,1,1);
-        toffset = -gprint(our_font, toffset, -128, name.c_str());
-    }
     
     float mousetheta;
     if (mouse_x != 0) {
         mousetheta = fmod(-atan2 ((float)mouse_y, (float)mouse_x) + 2.5*pi, 2*pi);
     } else {
-        mousetheta = mouse_y > 0 ? 2*pi : pi;
+        mousetheta = mouse_y > 0 ? 0 : pi;
     }
 
     int sub_last_mouse_x, sub_last_mouse_y;
     int s = children.size();
 
     int closestChild;
-    if (sqrt(mouse_x*mouse_x + mouse_y*mouse_y) < 256*opacity + 32) {
-        closestChild = s*mousetheta/(pi*2)+0.5;
+    if (sqrt(mouse_x*mouse_x + mouse_y*mouse_y) < 256*opacity + 32 && s > 0) {
+        closestChild = ((int)(s*mousetheta/(pi*2)+0.5)) % s;
     } else {
         closestChild = -1;
     }
 
+    if (level==1) {
+        glEnable(GL_TEXTURE_2D);
+        glColor3f(1,1,1);
+        if (closestChild == -1) {
+            toffset = -gprint(our_font, toffset, -128, name.c_str());
+        } else {
+            printf("closestChild: %i; mousetheta: %f\n", closestChild, mousetheta);
+            toffset = -gprint(our_font, toffset, -128, (*children.at(closestChild)).name.c_str());
+        }
+    }
+
     if (level<4) {
         for (int i=0; i<s; i++) {
-            float theta = ((float)i)/(float)(children.size())*2*pi;
+            float theta = ((float)i)/((float)(children.size()))*2*pi;
             float x = 256*opacity*sin(theta);
             float y = 256*opacity*cos(theta);
 
@@ -1221,41 +1226,32 @@ void Folder::draw(float opacity, int level, bool isSelected) {
     glPopMatrix();
 }
 void Folder::click(float opacity) {
-    printf("Click got to %s\n", path.c_str());
-    int last_mouse_x = mouse_x;
-    int last_mouse_y = mouse_y;
-    if (not (openChild==(Folder *)&FILE_NOT_FOUND)) {
-        float theta = ((float)openChildIndex)/(float)(children.size())*2*pi;
-        float x = 256*opacity*sin(theta);
-        float y = 256*opacity*cos(theta);
-        mouse_x = (mouse_x*scaleFactor)+x;
-        mouse_y = (mouse_y*scaleFactor)+y;
+    float mousetheta;
+    if (mouse_x != 0) {
+        mousetheta = fmod(-atan2 ((float)mouse_y, (float)mouse_x) + 2.5*pi, 2*pi);
+    } else {
+        mousetheta = mouse_y > 0 ? 2*pi : pi;
     }
-    int s = children.size();
-    int sub_last_mouse_x;
-    int sub_last_mouse_y;
-    for (int i=0; i<s; i++) {
-        float theta = ((float)i)/(float)(children.size())*2*pi;
-        float x = 256*opacity*sin(theta);
-        float y = 256*opacity*cos(theta);
-        sub_last_mouse_x = mouse_x;
-        sub_last_mouse_y = mouse_y;
-        float localScaleFactor = scaleFactor;
 
-        mouse_x = (mouse_x-x)/scaleFactor;
-        mouse_y = (mouse_y-y)/scaleFactor;
-        printf("%s: mouse_x: %i, mouse_y: %i\n", path.c_str(), mouse_x, mouse_y);
-        if (mouse_x>-128 and mouse_x<128 and mouse_y>-128 and mouse_y<128) {
+    int sub_last_mouse_x, sub_last_mouse_y;
+    int s = children.size();
+
+    int closestChild;
+    if (sqrt(mouse_x*mouse_x + mouse_y*mouse_y) < 256*opacity + 32) {
+        closestChild = s*mousetheta/(pi*2)+0.5;
+    } else {
+        closestChild = -1;
+    }
+    for (int i=0; i<s; i++) {
+        if (i == closestChild) {
             switch ((*children.at(i)).nodetype) {
                 case TYPE_FILE:
                     printf("Clicked %s\n", (*children.at(i)).path.c_str());
                     break;
                 case TYPE_FOLDER:
                     printf("Clicked folder %s\n", (*children.at(i)).path.c_str());
-                    openChild = (Folder *)children.at(i);
                     root = (*((Folder *)(children.at(i))));
                     root.read(1);
-                    // openChildIndex = std::find(children.begin(), children.end(), openChild) - children.begin();
             }
             printf("%i\n", openChildIndex);
             break;
@@ -1263,8 +1259,8 @@ void Folder::click(float opacity) {
         mouse_x = sub_last_mouse_x;
         mouse_y = sub_last_mouse_y;
     }
-    mouse_x = last_mouse_x;
-    mouse_y = last_mouse_y;
+    // mouse_x = last_mouse_x;
+    // mouse_y = last_mouse_y;
 }
 
 void Folder::transform(float opacity){
