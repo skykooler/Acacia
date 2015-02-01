@@ -917,6 +917,8 @@ Img load_img(const char *filename) {
 }
 
 Img circle;
+Img play_img;
+Img pause_img;
 Img line;
 
 class File {
@@ -1069,6 +1071,8 @@ void File::draw(float opacity, bool isSelected) {
     draw_img(-128,-128,256,256,circle.tex,fred,fgreen,fblue,selectedOpacity);
 }
 
+bool comparefilenames (File * i, File * j) { return ((*i).name<(*j).name); }
+
 File FILE_NOT_FOUND;
 
 class Folder : public File {
@@ -1114,6 +1118,7 @@ void GetFilesInDirectory(std::vector<File *> &out, const string &directory, int 
             // printf("Filename: %s\n",epdf->d_name);
        }
     }
+    sort (out.begin(), out.end(), comparefilenames);
 }
 
 Folder::Folder(string pth) {
@@ -1154,7 +1159,11 @@ void Folder::draw(float opacity, int level, bool isSelected) {
     // Yes, I'm using Euler integration. So sue me. It's fast, and the decaying exponentials cancel out any energy gain.
     selectedOpacity = selectedOpacity+selectedVelocity*delta_t;
 
-    draw_img(-128,-128,256,256,circle.tex,red,green,blue,selectedOpacity);
+    if (selectedChildIndex!=-1 && (*children.at(selectedChildIndex)).filetype == AUDIO) {
+        draw_img(-128,-128,256,256,play_img.tex,red,green,blue,selectedOpacity);
+    } else {
+        draw_img(-128,-128,256,256,circle.tex,red,green,blue,selectedOpacity);
+    }
     
     float mousetheta;
     if (mouse_x != 0) {
@@ -1265,10 +1274,23 @@ void Folder::click(float opacity) {
         root.read(1);
     }
     for (int i=0; i<s; i++) {
-        if (i == closestChild) {
+        if (i == selectedChildIndex) {
             switch ((*children.at(i)).nodetype) {
                 case TYPE_FILE:
                     printf("Clicked %s\n", (*children.at(i)).path.c_str());
+                    FILE * proc;
+                    char command[255];
+                    int len;
+                    // setsid makes process independent of parent
+                    len = snprintf(command, sizeof(command), "setsid xdg-open \"%s\"",(*children.at(i)).path.c_str());
+                    if (len <= sizeof(command))
+                    {
+                        proc = popen(command, "r");
+                    }
+                    else
+                    {
+                        // command buffer too short
+                    }
                     break;
                 case TYPE_FOLDER:
                     printf("Clicked folder %s\n", (*children.at(i)).path.c_str());
@@ -1346,6 +1368,31 @@ void pressRoot() {
             root.selectedChildIndex = (root.selectedChildIndex + 1) % s;
         }
         break;
+    case 65293: // Enter
+        if (root.selectedChildIndex!=-1) {
+            switch ((*root.children.at(root.selectedChildIndex)).nodetype) {
+                case TYPE_FILE:
+                    printf("Selected %s\n", (*root.children.at(root.selectedChildIndex)).path.c_str());
+                    FILE * proc;
+                    char command[255];
+                    int len;
+                    // setsid makes process independent of parent
+                    len = snprintf(command, sizeof(command), "setsid xdg-open \"%s\"",(*root.children.at(root.selectedChildIndex)).path.c_str());
+                    if (len <= sizeof(command))
+                    {
+                        proc = popen(command, "r");
+                    }
+                    else
+                    {
+                        // command buffer too short
+                    }
+                    break;
+                case TYPE_FOLDER:
+                    printf("Selected folder %s\n", (*root.children.at(root.selectedChildIndex)).path.c_str());
+                    root = (*((Folder *)(root.children.at(root.selectedChildIndex))));
+                    root.read(1);
+            }
+        }
     default:
         break;
     }
@@ -1407,6 +1454,8 @@ int main(int argc, char *argv[])
     createTheWindow();
     createTheRenderContext();
     circle = load_img("ring.png");
+    play_img = load_img("play.png");
+    pause_img = load_img("pause.png");
     line = load_img("line.png");
     our_font.init("/usr/share/fonts/truetype/freefont/FreeSans.ttf", 16); 
     root.read(1);
