@@ -104,6 +104,7 @@ int mouse_x, mouse_y;
 int button;
 long key;
 bool mousecontrol = false;
+bool playing = false;
 
 static int Xscreen;
 static Atom del_atom;
@@ -117,6 +118,8 @@ static GLXContext render_context;
 static Window Xroot, window_handle;
 static GLXWindow glX_window_handle;
 static int width, height;
+
+int minsize;
 
 static int VisData[] = {
 GLX_RENDER_TYPE, GLX_RGBA_BIT,
@@ -604,7 +607,7 @@ static void createTheWindow() {
 
     XMapRaised(Xdisplay,window_handle);
 
-    XGrabPointer(Xdisplay,window_handle,True,0,GrabModeAsync,GrabModeAsync,window_handle,0L,CurrentTime);
+    // XGrabPointer(Xdisplay,window_handle,True,0,GrabModeAsync,GrabModeAsync,window_handle,0L,CurrentTime);
 
     // XGrabKeyboard(Xdisplay,window_handle,False,GrabModeAsync,GrabModeAsync,CurrentTime);
     /*****************************/
@@ -718,6 +721,7 @@ static int updateTheMessageQueue() {
             xc = &(event.xconfigure);
             width = xc->width;
             height = xc->height;
+            minsize = min(width, height);
             break;
         case KeyPress:
             key = XLookupKeysym (&event.xkey, 0);
@@ -1152,7 +1156,7 @@ Folder::Folder(string pth, long bytes) {
     selectedChildIndex = -1;
 }
 
-Folder root("/home/skyler/Dropbox/", 0);
+Folder root("/home/skyler/", 0);
 void Folder::read(int levelsleft=1) {
     GetFilesInDirectory(children,path,levelsleft);
 }
@@ -1173,7 +1177,12 @@ void Folder::draw(float opacity, int level, bool isSelected) {
     selectedOpacity = selectedOpacity+selectedVelocity*delta_t;
 
     if (selectedChildIndex!=-1 && (*children.at(selectedChildIndex)).filetype == AUDIO) {
-        draw_img(-128,-128,256,256,play_img.tex,red,green,blue,selectedOpacity);
+        if (playing) {
+            draw_img(-128,-128,256,256,pause_img.tex,red,green,blue,selectedOpacity);
+        } else {
+            draw_img(-128,-128,256,256,play_img.tex,red,green,blue,selectedOpacity);
+        }
+            
     } else {
         draw_img(-128,-128,256,256,circle.tex,red,green,blue,selectedOpacity);
     }
@@ -1189,8 +1198,11 @@ void Folder::draw(float opacity, int level, bool isSelected) {
     int s = children.size();
 
     int closestChild;
-    if (sqrt(mouse_x*mouse_x + mouse_y*mouse_y) < 256*opacity + 32 && s > 0 && mousecontrol) {
+    if (sqrt(mouse_x*mouse_x + mouse_y*mouse_y) < (minsize/3)*opacity + 32 && s > 0 && mousecontrol) {
         closestChild = ((int)(s*mousetheta/(pi*2)+0.5)) % s;
+        selectedChildIndex = closestChild;
+    } else if (mousecontrol) {
+        closestChild = -1;
         selectedChildIndex = closestChild;
     } else {
         closestChild = -1;
@@ -1233,12 +1245,15 @@ void Folder::draw(float opacity, int level, bool isSelected) {
     if (level<4) {
         for (int i=0; i<s; i++) {
             float theta = ((float)i)/((float)(children.size()))*2*pi;
-            float x = 256*opacity*sin(theta);
-            float y = 256*opacity*cos(theta);
+            // float x = 256*opacity*sin(theta);
+            // float y = 256*opacity*cos(theta);
+            float x = (minsize/3)*opacity*sin(theta);
+            float y = (minsize/3)*opacity*cos(theta);
 
             glPushMatrix();
             glRotatef(180*theta/pi,0.0f,0.0f,1.0f);
-            draw_img(-4,0,8,256*opacity,line.tex,red,green,blue,selectedOpacity*0.25);
+            // draw_img(-4,0,8,256*opacity,line.tex,red,green,blue,selectedOpacity*0.25);
+            draw_img(-4,0,8,(minsize/3)*opacity,line.tex,red,green,blue,selectedOpacity*0.25);
             glPopMatrix();
             glPushMatrix();
 
@@ -1247,8 +1262,8 @@ void Folder::draw(float opacity, int level, bool isSelected) {
             float localScaleFactor = scaleFactor;
             glTranslatef(x,y,0);
 
-            mouse_x = (mouse_x-x)/localScaleFactor;
-            mouse_y = (mouse_y-y)/localScaleFactor;
+            // mouse_x = (mouse_x-x)/localScaleFactor;
+            // mouse_y = (mouse_y-y)/localScaleFactor;
             float hoverVelocityTarget;
             if (i==selectedChildIndex) {
                 // Set a target for the velocity of what it would be if we just used a straight exponential ease
@@ -1296,7 +1311,7 @@ void Folder::click(float opacity) {
     int s = children.size();
 
     int closestChild;
-    if (sqrt(mouse_x*mouse_x + mouse_y*mouse_y) < 256*opacity + 32) {
+    if (sqrt(mouse_x*mouse_x + mouse_y*mouse_y) < (minsize/3)*opacity + 32) {
         closestChild = s*mousetheta/(pi*2)+0.5;
     } else {
         closestChild = -1;
@@ -1368,6 +1383,8 @@ void clickRoot() {
 
 void pressRoot() {
     uint s = root.children.size();
+    string parent;
+    uint idx;
     switch (key) {
     case 65364: // Down
         if (root.selectedChildIndex==-1) {
@@ -1422,6 +1439,46 @@ void pressRoot() {
                     else
                     {
                         // command buffer too short
+                    }
+                    break;
+                case TYPE_FOLDER:
+                    printf("Selected folder %s\n", (*root.children.at(root.selectedChildIndex)).path.c_str());
+                    root = (*((Folder *)(root.children.at(root.selectedChildIndex))));
+                    root.read(1);
+            }
+        }
+        break;
+    case 65307: // Escape
+        root.selectedChildIndex = -1;
+        idx = root.path.rfind('/',root.path.size()-2);
+        if(idx != std::string::npos) {
+            parent = root.path.substr(0,idx+1);
+        } else {
+            parent = "/";
+        }
+        root = *(new Folder(parent, 0));
+        root.read(1);
+        break;
+    case 32: // Space
+        if (root.selectedChildIndex!=-1) {
+            switch ((*root.children.at(root.selectedChildIndex)).nodetype) {
+                case TYPE_FILE:
+                    if ((*root.children.at(root.selectedChildIndex)).filetype == AUDIO) {
+                        printf("Selected %s\n", (*root.children.at(root.selectedChildIndex)).path.c_str());
+                        FILE * proc;
+                        char command[255];
+                        int len;
+                        // setsid makes process independent of parent
+                        len = snprintf(command, sizeof(command), "mplayer \"%s\"",(*root.children.at(root.selectedChildIndex)).path.c_str());
+                        if (len <= sizeof(command))
+                        {
+                            proc = popen(command, "r");
+                            playing = true;
+                        }
+                        else
+                        {
+                            // command buffer too short
+                        }
                     }
                     break;
                 case TYPE_FOLDER:
