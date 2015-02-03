@@ -1,5 +1,6 @@
 g++ acacia-new.cpp -o acacia -I/usr/include/freetype2/ -I/usr/include/ -lGL -lGLU -lglut -lpng -lX11 -lXrender -lfreetype -fpermissive -g
 
+mplayer
 libfreeglut3-dev
 libfreetype6-dev
 libxrender-dev
