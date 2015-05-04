@@ -24,6 +24,7 @@
 
 ------------------------------------------------------------------------*/
 
+#include <cstdlib>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -53,6 +54,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <iostream>
 
 #include <wctype.h>
 
@@ -105,6 +107,12 @@ int button;
 long key;
 bool mousecontrol = false;
 bool playing = false;
+bool paused = false;
+FILE *mplayer_pipe;
+
+int playingindex = -1;
+
+float isf; // Interface scale factor
 
 static int Xscreen;
 static Atom del_atom;
@@ -172,7 +180,7 @@ void make_dlist ( FT_Face face, char ch, GLuint list_base, GLuint * tex_base ) {
         printf("ERROR: FT_Load_Glyph failed\n");
         return;
     }
- 
+
     // Move The Face's Glyph Into A Glyph Object.
     FT_Glyph glyph;
     if(FT_Get_Glyph( face->glyph, &glyph )) {
@@ -191,7 +199,7 @@ void make_dlist ( FT_Face face, char ch, GLuint list_base, GLuint * tex_base ) {
     // Our Texture.
     int width = next_p2( bitmap.width );
     int height = next_p2( bitmap.rows );
-     
+
     // Allocate Memory For The Texture Data.
     GLubyte* expanded_data = new GLubyte[ 2 * width * height];
      
@@ -238,7 +246,7 @@ void make_dlist ( FT_Face face, char ch, GLuint list_base, GLuint * tex_base ) {
     // Now We Move Down A Little In The Case That The
     // Bitmap Extends Past The Bottom Of The Line
     // This Is Only True For Characters Like 'g' Or 'y'.
-    glTranslatef(0,bitmap_glyph->top-bitmap.rows,0);
+    glTranslatef(0,(float)bitmap_glyph->top-bitmap.rows,0);
  
     // Now We Need To Account For The Fact That Many Of
     // Our Textures Are Filled With Empty Padding Space.
@@ -398,6 +406,8 @@ font_data our_font;
 
 struct timeval earlier;
 struct timeval later;
+
+struct timezone tz;
 
 long long delta_t;
 
@@ -931,6 +941,7 @@ Img circle;
 Img play_img;
 Img pause_img;
 Img line;
+Img bar;
 
 class File {
     public:
@@ -1173,11 +1184,11 @@ void Folder::draw(float opacity, int level, bool isSelected) {
     }
     // Exponentially ease velocity towards target
     selectedVelocity = selectedVelocity+((selectedVelocityTarget-selectedVelocity)/100000)*delta_t;
-    // Yes, I'm using Euler integration. So sue me. It's fast, and the decaying exponentials cancel out any energy gain.
+    // Yes, I'm using Euler integration. So sue me. It's fast, and the decaying exponentials cancel out any energy gain. Usually.
     selectedOpacity = selectedOpacity+selectedVelocity*delta_t;
 
     if (selectedChildIndex!=-1 && (*children.at(selectedChildIndex)).filetype == AUDIO) {
-        if (playing) {
+        if (playing && !paused) {
             draw_img(-128,-128,256,256,pause_img.tex,red,green,blue,selectedOpacity);
         } else {
             draw_img(-128,-128,256,256,play_img.tex,red,green,blue,selectedOpacity);
@@ -1211,13 +1222,15 @@ void Folder::draw(float opacity, int level, bool isSelected) {
     if (level==1) {
         glEnable(GL_TEXTURE_2D);
         glColor3f(1,1,1);
+        float line1pos = -128*isf;
+        float line2pos = -148*isf;
         if (selectedChildIndex == -1) {
-            toffset = -gprint(our_font, toffset, -128, name.c_str());
-            gprint (our_font, toffset, -148, "%i Items", s);
+            toffset = -gprint(our_font, toffset, line1pos, name.c_str());
+            gprint (our_font, toffset, line2pos, "%i Items", s);
         } else {
-            toffset = -gprint(our_font, toffset, -128, (*children.at(selectedChildIndex)).name.c_str());
+            toffset = -gprint(our_font, toffset, line1pos, (*children.at(selectedChildIndex)).name.c_str());
             if ((*children.at(selectedChildIndex)).nodetype==TYPE_FOLDER) {
-                gprint (our_font, toffset, -148, "%i Items", (*(Folder*)(children.at(selectedChildIndex))).children.size());
+                gprint (our_font, toffset, line2pos, "%i Items", (*(Folder*)(children.at(selectedChildIndex))).children.size());
             } else {
                 long childsize = (*children.at(selectedChildIndex)).size;
                 string expstr;
@@ -1225,18 +1238,18 @@ void Folder::draw(float opacity, int level, bool isSelected) {
                     if (childsize>1048576) {
                         if (childsize>1073741824) {
                             if (childsize>1099511627776) {
-                               gprint (our_font, toffset, -148, "%i TB", childsize/1099511627776);
+                               gprint (our_font, toffset, line2pos, "%i TB", childsize/1099511627776);
                             } else {
-                               gprint (our_font, toffset, -148, "%i GB", childsize/1073741824);
+                               gprint (our_font, toffset, line2pos, "%i GB", childsize/1073741824);
                             }
                         } else {
-                           gprint (our_font, toffset, -148, "%i MB", childsize/1048576);
+                           gprint (our_font, toffset, line2pos, "%i MB", childsize/1048576);
                         }
                     } else {
-                       gprint (our_font, toffset, -148, "%i KB", childsize/1024);
+                       gprint (our_font, toffset, line2pos, "%i KB", childsize/1024);
                     }
                 } else {
-                    gprint (our_font, toffset, -148, "%i Bytes", childsize);
+                    gprint (our_font, toffset, line2pos, "%i Bytes", childsize);
                 }
             }
         }
@@ -1381,13 +1394,23 @@ void clickRoot() {
     mouse_y = last_mouse_y;
 }
 
+void stop() {
+    if (playing) {
+        fputs("stop\n", mplayer_pipe);
+        fflush(mplayer_pipe);
+        paused = !false;
+        playing = false;
+    }
+}
+
 void pressRoot() {
     uint s = root.children.size();
     string parent;
     uint idx;
     switch (key) {
     case 65364: // Down
-        if (root.selectedChildIndex==-1) {
+        stop()
+;        if (root.selectedChildIndex==-1) {
             root.selectedChildIndex = (int)(s/2);
         } else if (root.selectedChildIndex<s/2.0 && root.selectedChildIndex >= 0) {
             root.selectedChildIndex += 1;
@@ -1396,6 +1419,7 @@ void pressRoot() {
         }
         break;
     case 65362: // Up
+        stop();
         if (root.selectedChildIndex==-1) {
             root.selectedChildIndex = 0;
         } else if (root.selectedChildIndex<s/2.0 && root.selectedChildIndex > 0) {
@@ -1405,6 +1429,7 @@ void pressRoot() {
         }
         break;
     case 65361: // Left
+        stop();
         if (root.selectedChildIndex==-1) {
             root.selectedChildIndex = (int)(s*3/4);
         } else if (root.selectedChildIndex<s*3/4.0 && root.selectedChildIndex > s/4.0) {
@@ -1414,6 +1439,7 @@ void pressRoot() {
         }
         break;
     case 65363: // Right
+        stop();
         if (root.selectedChildIndex==-1) {
             root.selectedChildIndex = (int)(s/4);
         } else if (root.selectedChildIndex<s*3/4.0 && root.selectedChildIndex > s/4.0) {
@@ -1423,6 +1449,7 @@ void pressRoot() {
         }
         break;
     case 65293: // Enter
+        stop();
         if (root.selectedChildIndex!=-1) {
             switch ((*root.children.at(root.selectedChildIndex)).nodetype) {
                 case TYPE_FILE:
@@ -1449,6 +1476,7 @@ void pressRoot() {
         }
         break;
     case 65307: // Escape
+        stop();
         root.selectedChildIndex = -1;
         idx = root.path.rfind('/',root.path.size()-2);
         if(idx != std::string::npos) {
@@ -1461,30 +1489,59 @@ void pressRoot() {
         break;
     case 32: // Space
         if (root.selectedChildIndex!=-1) {
-            switch ((*root.children.at(root.selectedChildIndex)).nodetype) {
-                case TYPE_FILE:
-                    if ((*root.children.at(root.selectedChildIndex)).filetype == AUDIO) {
-                        printf("Selected %s\n", (*root.children.at(root.selectedChildIndex)).path.c_str());
-                        FILE * proc;
-                        char command[255];
-                        int len;
-                        // setsid makes process independent of parent
-                        len = snprintf(command, sizeof(command), "mplayer \"%s\"",(*root.children.at(root.selectedChildIndex)).path.c_str());
-                        if (len <= sizeof(command))
-                        {
-                            proc = popen(command, "r");
-                            playing = true;
+            if (playing and paused or playingindex==root.selectedChildIndex) {
+                printf("Pausing\n");
+                fputs("pause\n", mplayer_pipe);
+                fflush(mplayer_pipe);
+                paused = !paused;
+            } else {
+                switch ((*root.children.at(root.selectedChildIndex)).nodetype) {
+                    case TYPE_FILE:
+                        if ((*root.children.at(root.selectedChildIndex)).filetype == AUDIO) {
+                            printf("Selected %s\n", (*root.children.at(root.selectedChildIndex)).path.c_str());
+                            //FILE * proc;
+                            char command[255];
+                            int len;
+                            // setsid makes process independent of parent
+                            if (playing) {
+                                len = snprintf(command, sizeof(command), "loadfile \"%s\"\n",(*root.children.at(root.selectedChildIndex)).path.c_str());
+                                if (len <= sizeof(command))
+                                {
+                                    fputs(command, mplayer_pipe);
+                                    playing = true; 
+                                    paused = false;
+                                    playingindex = root.selectedChildIndex;
+                                }
+                                else
+                                {
+                                    // command buffer too short
+                                }
+                            } else {
+                                len = snprintf(command, sizeof(command), "mplayer -slave -idle -quiet \"%s\"",(*root.children.at(root.selectedChildIndex)).path.c_str());
+                                if (len <= sizeof(command))
+                                {
+                                    mplayer_pipe = popen(command, "w");
+                                    playing = true;
+                                    paused = false;
+                                    playingindex = root.selectedChildIndex;
+                                }
+                                else
+                                {
+                                    // command buffer too short
+                                }
+                            }
+                        } else if (playing) {
+                            printf("Pausing\n");
+                            fputs("pause\n", mplayer_pipe);
+                            fflush(mplayer_pipe);
+                            paused = !paused;
                         }
-                        else
-                        {
-                            // command buffer too short
-                        }
-                    }
-                    break;
-                case TYPE_FOLDER:
-                    printf("Selected folder %s\n", (*root.children.at(root.selectedChildIndex)).path.c_str());
-                    root = (*((Folder *)(root.children.at(root.selectedChildIndex))));
-                    root.read(1);
+                        break;
+                    case TYPE_FOLDER:
+                        printf("Selected folder %s\n", (*root.children.at(root.selectedChildIndex)).path.c_str());
+                        root = (*((Folder *)(root.children.at(root.selectedChildIndex))));
+                        root.read(1);
+                }
             }
         }
     default:
@@ -1495,7 +1552,7 @@ void pressRoot() {
 static void redrawTheWindow()
 {
     gettimeofday(&later,NULL);
-    delta_t = timeval_diff(NULL,&later,&earlier);
+    delta_t = min(timeval_diff(NULL,&later,&earlier), (long long int)100000);
     gettimeofday(&earlier,NULL);
 
     float const aspect = (float)width / (float)height;
@@ -1530,6 +1587,83 @@ static void redrawTheWindow()
     mouse_y = mouse_y-height/2;
     root.transform();
     root.draw();
+
+    float hour = fmod(((float)(earlier.tv_sec%43200)/3600 - ((float)tz.tz_minuteswest)/60)+12, 12);
+
+    float minute = ((float)(earlier.tv_sec%3600)/60);
+
+    float sec = (float)(earlier.tv_sec%60 + (float)earlier.tv_usec/1000000);
+
+    // float sred = 0.5+max(0.0f,min(sec/40,1-sec/40));
+    // float sgreen = 0.5+max(0.0f,min((sec-20)/40,1-(sec-20)/40));
+    // float sblue = 0.5+max(0.0f,min((float)(((int)sec-40)%60)/40,1-(float)(((int)sec-40)%60)/40));
+
+    float sred = max(0.0f,min(min(sec/20,1.0f),2-sec/20))*0.5+0.5;
+    float sgreen = max(0.0,min(min(fmod(sec+40,60)/20,1.0),2-fmod(sec+40,60)/20))*0.5+0.5;
+    float sblue = max(0.0,min(min(fmod(sec+20,60)/20,1.0),2-fmod(sec+20,60)/20))*0.5+0.5;
+
+    float mred = max(0.0f,min(min(minute/20,1.0f),2-minute/20))*0.5+0.5;
+    float mgreen = max(0.0,min(min(fmod(minute+40,60)/20,1.0),2-fmod(minute+40,60)/20))*0.5+0.5;
+    float mblue = max(0.0,min(min(fmod(minute+20,60)/20,1.0),2-fmod(minute+20,60)/20))*0.5+0.5;
+
+    float hred = max(0.0f,min(min(hour/4,1.0f),2-hour/4))*0.5+0.5;
+    float hgreen = max(0.0,min(min(fmod(hour+8,12)/4,1.0),2-fmod(hour+8,12)/4))*0.5+0.5;
+    float hblue = max(0.0,min(min(fmod(hour+4,12)/4,1.0),2-fmod(hour+4,12)/4))*0.5+0.5;
+
+    if (sec<3) {
+        for (int i=0; i<360; i++) {
+            glPushMatrix();
+            glRotatef(90-i,0,0,1);
+            glTranslatef(minsize/3+120,0,0);
+            draw_img(0,0,20*isf,(minsize/3+120)*pi/1800+1,bar.tex,sred,sgreen,sblue,1-sec/3.0);
+            glPopMatrix();
+            
+        }
+        if (minute<1) {
+            for (int i=0; i<360; i++) {
+                glPushMatrix();
+                glRotatef(90-i,0,0,1);
+                glTranslatef(minsize/3+150,0,0);
+                draw_img(0,0,20*isf,(minsize/3+150)*pi/1800+1,bar.tex,mred,mgreen,mblue,1-sec/3.0);
+                glPopMatrix();
+            }
+            if (hour<1) {
+                for (int i=0; i<360; i++) {
+                    glPushMatrix();
+                    glRotatef(90-i,0,0,1);
+                    glTranslatef(minsize/3+180,0,0);
+                    draw_img(0,0,20*isf,(minsize/3+180)*pi/1800+1,bar.tex,hred,hgreen,hblue,1-sec/3.0);
+                    glPopMatrix();
+                }
+            }
+        }
+    }
+
+    for (int i=0; i<sec*6; i++) {
+        glPushMatrix();
+        glRotatef(90-i,0,0,1);
+        glTranslatef(minsize/3+120,0,0);
+        draw_img(0,0,20*isf,(minsize/3+120)*pi/1800+1,bar.tex,sred,sgreen,sblue,1);
+        glPopMatrix();
+        
+    }
+    for (int i=0; i<minute*6; i++) {
+        glPushMatrix();
+        glRotatef(90-i,0,0,1);
+        glTranslatef(minsize/3+150,0,0);
+        draw_img(0,0,20*isf,(minsize/3+150)*pi/1800+1,bar.tex,mred,mgreen,mblue,1);
+        glPopMatrix();
+        
+    }
+
+    for (int i=0; i<hour*30; i++) {
+        glPushMatrix();
+        glRotatef(90-i,0,0,1);
+        glTranslatef(minsize/3+180,0,0);
+        draw_img(0,0,20*isf,(minsize/3+180)*pi/1800+1,bar.tex,hred,hgreen,hblue,1);
+        glPopMatrix();
+        
+    }
     mouse_x = last_mouse_x;
     mouse_y = last_mouse_y;
 
@@ -1540,9 +1674,31 @@ static void redrawTheWindow()
     glXSwapBuffers(Xdisplay, glX_window_handle);
 }
 
+std::string exec(char const* cmd) {
+    FILE* pipe = popen(cmd, "r");
+    if (!pipe) return "ERROR";
+    char buffer[128];
+    std::string result = "";
+    while(!feof(pipe)) {
+        if(fgets(buffer, 128, pipe) != NULL)
+            result += buffer;
+    }
+    pclose(pipe);
+    return result;
+}
+
 int main(int argc, char *argv[])
 {
-    gettimeofday(&earlier,NULL);
+    gettimeofday(&earlier,&tz);
+    std::string scale_factor_string = exec("dconf read /com/ubuntu/user-interface/scale-factor");
+    std::string delimiter = ": ";
+    scale_factor_string.erase(0, scale_factor_string.find(delimiter) + delimiter.length());
+    scale_factor_string = scale_factor_string.substr(0,scale_factor_string.find('}'));
+    isf = ((float)atoi(scale_factor_string.c_str()))/8;
+    printf("Interface scale factor: %f\n", isf);
+
+    printf("Time: %f : %f\n", ((float)(earlier.tv_sec%43200)/3600 - ((float)tz.tz_minuteswest)/60), ((float)(earlier.tv_sec%3600)/60));
+
     mouse_x = -1;
     mouse_y = -1;
     createTheWindow();
@@ -1551,7 +1707,9 @@ int main(int argc, char *argv[])
     play_img = load_img("play.png");
     pause_img = load_img("pause.png");
     line = load_img("line.png");
-    our_font.init("/usr/share/fonts/truetype/freefont/FreeSans.ttf", 16); 
+    bar = load_img("bar.png");
+    our_font.init("/usr/share/fonts/truetype/freefont/FreeSans.ttf", (int)(16*isf)); 
+    // our_font.init("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", (int)(16*isf)); 
     root.read(1);
 
     while (updateTheMessageQueue()) {
