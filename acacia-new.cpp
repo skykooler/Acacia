@@ -1549,6 +1549,14 @@ void pressRoot() {
     }
 }
 
+void drawClockSeg(float rot, float offset, float red, float green, float blue, float alpha) {
+    glPushMatrix();
+    glRotatef(90-rot,0,0,1);
+    glTranslatef(minsize/3+offset,0,0);
+    draw_img(0,0,20*isf,(minsize/3+offset)*pi/1800+1,bar.tex,red,green,blue,alpha);
+    glPopMatrix();
+}
+
 static void redrawTheWindow()
 {
     gettimeofday(&later,NULL);
@@ -1590,7 +1598,7 @@ static void redrawTheWindow()
 
     float hour = fmod(((float)(earlier.tv_sec%43200)/3600 - ((float)tz.tz_minuteswest)/60)+12, 12);
 
-    float minute = ((float)(earlier.tv_sec%3600)/60);
+    float minute = (fmod(earlier.tv_sec + (float)earlier.tv_usec/1000000.0,3600.0)/60.0);
 
     float sec = (float)(earlier.tv_sec%60 + (float)earlier.tv_usec/1000000);
 
@@ -1639,31 +1647,26 @@ static void redrawTheWindow()
         }
     }
 
-    for (int i=0; i<sec*6; i++) {
-        glPushMatrix();
-        glRotatef(90-i,0,0,1);
-        glTranslatef(minsize/3+120,0,0);
-        draw_img(0,0,20*isf,(minsize/3+120)*pi/1800+1,bar.tex,sred,sgreen,sblue,1);
-        glPopMatrix();
-        
-    }
-    for (int i=0; i<minute*6; i++) {
-        glPushMatrix();
-        glRotatef(90-i,0,0,1);
-        glTranslatef(minsize/3+150,0,0);
-        draw_img(0,0,20*isf,(minsize/3+150)*pi/1800+1,bar.tex,mred,mgreen,mblue,1);
-        glPopMatrix();
-        
-    }
+    for (int i=0; i<=sec*6-1; i++) {
 
-    for (int i=0; i<hour*30; i++) {
-        glPushMatrix();
-        glRotatef(90-i,0,0,1);
-        glTranslatef(minsize/3+180,0,0);
-        draw_img(0,0,20*isf,(minsize/3+180)*pi/1800+1,bar.tex,hred,hgreen,hblue,1);
-        glPopMatrix();
+        drawClockSeg(i,120,sred,sgreen,sblue,1);
         
     }
+    drawClockSeg((int)(sec*6),120,sred,sgreen,sblue,fmod(sec*6,1));
+
+    for (int i=0; i<=minute*6-1; i++) {
+
+        drawClockSeg(i,150,mred,mgreen,mblue,1);
+        
+    }
+    drawClockSeg((int)(minute*6),150,mred,mgreen,mblue,fmod(minute*6.0,1));
+
+    for (int i=0; i<hour*30-1; i++) {
+        
+        drawClockSeg(i,180,hred,hgreen,hblue,1);
+    }
+    drawClockSeg((int)(hour*30),180,hred,hgreen,hblue,fmod(hour*30.0,1));
+
     mouse_x = last_mouse_x;
     mouse_y = last_mouse_y;
 
