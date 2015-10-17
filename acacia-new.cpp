@@ -46,15 +46,15 @@
 #include <X11/Xutil.h>
 
 #include <ft2build.h>
-#include <freetype/freetype.h>
-#include <freetype/ftglyph.h>
-#include <freetype/ftoutln.h>
-#include <freetype/fttrigon.h>
+
+#include <FTGL/ftgl.h>
 
 #include <string>
 #include <vector>
 #include <algorithm>
 #include <iostream>
+#include <queue>
+#include <map>
 
 #include <wctype.h>
 
@@ -81,6 +81,12 @@ static enum {
     AUDIO,
     BINARY
 } filetypes;
+
+static enum {
+    LEFT,
+    CENTER,
+    RIGHT
+} textalign;
 
 typedef struct  {
     unsigned long   flags;
@@ -114,6 +120,10 @@ int playingindex = -1;
 
 float isf; // Interface scale factor
 
+string userinput = "";
+bool typing = false;
+
+FTGLPixmapFont ftgl_font("/usr/share/fonts/truetype/freefont/FreeSans.ttf");
 static int Xscreen;
 static Atom del_atom;
 static Colormap cmap;
@@ -141,268 +151,48 @@ GLX_DEPTH_SIZE, 16,
 None
 };
 
+int modifiers = 0;
+int SHIFT = 1;
+int CONTROL = 2;
+int ALT = 4;
+int META = 8;
+
+
 double logbase(double a, double base)
 {
    return log(a) / log(base);
 }
  
-// This Holds All Of The Information Related To Any
-// FreeType Font That We Want To Create. 
-struct font_data {
-    float h;                                        // Holds The Height Of The Font.
-    GLuint * textures;                                  // Holds The Texture Id's
-    GLuint list_base;                                   // Holds The First Display List Id
- 
-    // The Init Function Will Create A Font With
-    // The Height h From The File fname.
-    void init(const char * fname, unsigned int h);
- 
-    // Free All The Resources Associated With The Font.
-        void clean();
-};
 
-inline int next_p2 (int a )
-{
-    int rval=1;
-    // rval<<=1 Is A Prettier Way Of Writing rval*=2;
-    while(rval<a) rval<<=1;
-    return rval;
-}
+float ftprint(FTPixmapFont *font, float x, float y, int alignment, string text, ...) {
+    const char *t = text.c_str();
+    char formatted_text[256];
 
-// Create A Display List Corresponding To The Given Character.
-void make_dlist ( FT_Face face, char ch, GLuint list_base, GLuint * tex_base ) {
- 
-    // The First Thing We Do Is Get FreeType To Render Our Character
-    // Into A Bitmap.  This Actually Requires A Couple Of FreeType Commands:
- 
-    // Load The Glyph For Our Character.
-    if(FT_Load_Glyph( face, FT_Get_Char_Index( face, ch ), FT_LOAD_DEFAULT )) {
-        printf("ERROR: FT_Load_Glyph failed\n");
-        return;
-    }
-
-    // Move The Face's Glyph Into A Glyph Object.
-    FT_Glyph glyph;
-    if(FT_Get_Glyph( face->glyph, &glyph )) {
-        printf("ERROR: FT_Get_Glyph failed\n");
-        return;
-    }
- 
-    // Convert The Glyph To A Bitmap.
-    FT_Glyph_To_Bitmap( &glyph, ft_render_mode_normal, 0, 1 );
-    FT_BitmapGlyph bitmap_glyph = (FT_BitmapGlyph)glyph;
- 
-    // This Reference Will Make Accessing The Bitmap Easier.
-    FT_Bitmap& bitmap=bitmap_glyph->bitmap;
-    // Use Our Helper Function To Get The Widths Of
-    // The Bitmap Data That We Will Need In Order To Create
-    // Our Texture.
-    int width = next_p2( bitmap.width );
-    int height = next_p2( bitmap.rows );
-
-    // Allocate Memory For The Texture Data.
-    GLubyte* expanded_data = new GLubyte[ 2 * width * height];
-     
-    // Here We Fill In The Data For The Expanded Bitmap.
-    // Notice That We Are Using A Two Channel Bitmap (One For
-    // Channel Luminosity And One For Alpha), But We Assign
-    // Both Luminosity And Alpha To The Value That We
-    // Find In The FreeType Bitmap.
-    // We Use The ?: Operator To Say That Value Which We Use
-    // Will Be 0 If We Are In The Padding Zone, And Whatever
-    // Is The FreeType Bitmap Otherwise.
-    for(int j=0; j <height;j++) {
-        for(int i=0; i < width; i++){
-            expanded_data[2*(i+j*width)]= expanded_data[2*(i+j*width)+1] =
-                (i>=bitmap.width || j>=bitmap.rows) ?
-                0 : bitmap.buffer[i + bitmap.width*j];
-        }
-    }
-    // Now We Just Setup Some Texture Parameters.
-    glBindTexture( GL_TEXTURE_2D, tex_base[ch]);
-    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
-     
-    // Here We Actually Create The Texture Itself, Notice
-    // That We Are Using GL_LUMINANCE_ALPHA To Indicate That
-    // We Are Using 2 Channel Data.
-    glTexImage2D( GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0,
-        GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, expanded_data );
-     
-    // With The Texture Created, We Don't Need The Expanded Data Anymore.
-    delete [] expanded_data;
-    // Now We Create The Display List
-    glNewList(list_base+ch,GL_COMPILE);
- 
-    glBindTexture(GL_TEXTURE_2D,tex_base[ch]);
- 
-    glPushMatrix();
- 
-    // First We Need To Move Over A Little So That
-    // The Character Has The Right Amount Of Space
-    // Between It And The One Before It.
-    glTranslatef(bitmap_glyph->left,0,0);
- 
-    // Now We Move Down A Little In The Case That The
-    // Bitmap Extends Past The Bottom Of The Line
-    // This Is Only True For Characters Like 'g' Or 'y'.
-    glTranslatef(0,(float)bitmap_glyph->top-bitmap.rows,0);
- 
-    // Now We Need To Account For The Fact That Many Of
-    // Our Textures Are Filled With Empty Padding Space.
-    // We Figure What Portion Of The Texture Is Used By
-    // The Actual Character And Store That Information In
-    // The x And y Variables, Then When We Draw The
-    // Quad, We Will Only Reference The Parts Of The Texture
-    // That Contains The Character Itself.
-    float   x=(float)bitmap.width / (float)width,
-    y=(float)bitmap.rows / (float)height;
- 
-    // Here We Draw The Texturemapped Quads.
-    // The Bitmap That We Got From FreeType Was Not
-    // Oriented Quite Like We Would Like It To Be,
-    // But We Link The Texture To The Quad
-    // In Such A Way That The Result Will Be Properly Aligned.
-    glBegin(GL_QUADS);
-    glTexCoord2d(0,0); glVertex2f(0,bitmap.rows);
-    glTexCoord2d(0,y); glVertex2f(0,0);
-    glTexCoord2d(x,y); glVertex2f(bitmap.width,0);
-    glTexCoord2d(x,0); glVertex2f(bitmap.width,bitmap.rows);
-    glEnd();
-    glPopMatrix();
-    glTranslatef(face->glyph->advance.x >> 6 ,0,0);
- 
-    // Increment The Raster Position As If We Were A Bitmap Font.
-    // (Only Needed If You Want To Calculate Text Length)
-    glBitmap(0,0,0,0,face->glyph->advance.x >> 6,0,NULL);
- 
-    // Finish The Display List
-    glEndList();
-}
-
-void font_data::init(const char * fname, unsigned int h) {
-    // Allocate Some Memory To Store The Texture Ids.
-    textures = new GLuint[128];
- 
-    this->h=h;
- 
-    // Create And Initilize A FreeType Font Library.
-    FT_Library library;
-    if (FT_Init_FreeType( &library )) {
-        printf("ERROR: FT_Init_FreeType failed\n");
-        return;
-    }
- 
-    // The Object In Which FreeType Holds Information On A Given
-    // Font Is Called A "face".
-    FT_Face face;
- 
-    // This Is Where We Load In The Font Information From The File.
-    // Of All The Places Where The Code Might Die, This Is The Most Likely,
-    // As FT_New_Face Will Fail If The Font File Does Not Exist Or Is Somehow Broken.
-    if (FT_New_Face( library, fname, 0, &face )) {
-        printf("ERROR: FT_New_Face failed (there is probably a problem with your font file)\n");
-        return;
-    }
- 
-    // For Some Twisted Reason, FreeType Measures Font Size
-    // In Terms Of 1/64ths Of Pixels.  Thus, To Make A Font
-    // h Pixels High, We Need To Request A Size Of h*64.
-    // (h << 6 Is Just A Prettier Way Of Writing h*64)
-    FT_Set_Char_Size( face, h << 6, h << 6, 96, 96);
- 
-    // Here We Ask OpenGL To Allocate Resources For
-    // All The Textures And Display Lists Which We
-    // Are About To Create. 
-    list_base=glGenLists(128);
-    glGenTextures( 128, textures );
- 
-    // This Is Where We Actually Create Each Of The Fonts Display Lists.
-    for(unsigned char i=0;i<128;i++)
-        make_dlist(face,i,list_base,textures);
- 
-    // We Don't Need The Face Information Now That The Display
-    // Lists Have Been Created, So We Free The Assosiated Resources.
-    FT_Done_Face(face);
- 
-    // Ditto For The Font Library.
-    FT_Done_FreeType(library);
-}
-
-void font_data::clean() {
-    glDeleteLists(list_base,128);
-    glDeleteTextures(128,textures);
-    delete [] textures;
-}
-
-// A Fairly Straightforward Function That Pushes
-// A Projection Matrix That Will Make Object World
-// Coordinates Identical To Window Coordinates.
-inline void pushScreenCoordinateMatrix() {
-    glPushAttrib(GL_TRANSFORM_BIT);
-    GLint   viewport[4];
-    glGetIntegerv(GL_VIEWPORT, viewport);
-    glMatrixMode(GL_PROJECTION);
-    glPushMatrix();
-    glLoadIdentity();
-    gluOrtho2D(viewport[0],viewport[2],viewport[1],viewport[3]);
-    glPopAttrib();
-}
- 
-// Pops The Projection Matrix Without Changing The Current
-// MatrixMode.
-inline void pop_projection_matrix() {
-    glPushAttrib(GL_TRANSFORM_BIT);
-    glMatrixMode(GL_PROJECTION);
-    glPopMatrix();
-    glPopAttrib();
-}
-
-// Much Like NeHe's glPrint Function, But Modified To Work
-// With FreeType Fonts.
-float gprint(const font_data &ft_font, float x, float y, const char *fmt, ...)  {
-    glPushMatrix();
-    glTranslatef(x,y,0.0);
-    GLuint font=ft_font.list_base;
-    // We Make The Height A Little Bigger.  There Will Be Some Space Between Lines.
-    //float h=ft_font.h/.63f;                                                
-    char    text[256];                                  // Holds Our String
     va_list ap;                                     // Pointer To List Of Arguments
     
-    if (fmt == NULL)                                    // If There's No Text
-        *text=0;                                    // Do Nothing
+    if (t == NULL)                                    // If There's No Text
+        *formatted_text=0;                                    // Do Nothing
     else {
-        va_start(ap, fmt);                              // Parses The String For Variables
-        vsprintf(text, fmt, ap);                            // And Converts Symbols To Actual Numbers
-        va_end(ap);                                 // Results Are Stored In Text
+        va_start(ap, text);                              // Parses The String For Variables
+        vsprintf(formatted_text, t, ap);                            // And Converts Symbols To Actual Numbers
+        va_end(ap);                                 // Results Are Stored In formatted_text
     }
-    
-    // Here Is Some Code To Split The Text That We Have Been
-    // Given Into A Set Of Lines. 
-    // This Could Be Made Much Neater By Using
-    // A Regular Expression Library Such As The One Available From
-    // boost.org (I've Only Done It Out By Hand To Avoid Complicating
-    // This Tutorial With Unnecessary Library Dependencies).
-    
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);     
-    
-    glListBase(font);
-    
-    string line(text);
-    
-    glRasterPos2f(0,0);
-    glCallLists(line.length(), GL_UNSIGNED_BYTE, text);
 
-    float rpos[4];
-    glGetFloatv(GL_CURRENT_RASTER_POSITION ,rpos);
-    float len=(rpos[0]-x)/16;
-
-    glPopMatrix();
-
-    return len;
+    switch (alignment) {
+        case CENTER:
+            glRasterPos2f(x-(*font).Advance(formatted_text)/2, y);
+            break;
+        case RIGHT:
+            glRasterPos2f(x-(*font).Advance(formatted_text), y);
+            break;
+        case LEFT:
+        default:
+            glRasterPos2f(x,y);
+            break;
+    }
+    (*font).Render(formatted_text);
 }
 
-font_data our_font;
 
 struct timeval earlier;
 struct timeval later;
@@ -434,6 +224,7 @@ long long timeval_diff(struct timeval *difference, struct timeval *end_time, str
 
 void clickRoot();
 void pressRoot();
+void releaseRoot();
 
 static int isExtensionSupported(const char *extList, const char *extension) {
 
@@ -739,8 +530,8 @@ static int updateTheMessageQueue() {
             pressRoot();
             break;
         case KeyRelease:
-            printf ("key #%ld was released.\n",
-             (long) XLookupKeysym (&event.xkey, 0));
+            key = XLookupKeysym (&event.xkey, 0);
+            releaseRoot();
             break;
         }
     }
@@ -943,6 +734,9 @@ Img pause_img;
 Img line;
 Img bar;
 
+queue<string> imgcache;
+map<string,Img> imgmap;
+
 class File {
     public:
         File();
@@ -950,6 +744,7 @@ class File {
         void draw(float opacity=1, bool isSelected=false);
         string path;
         string name;
+        string file_extension;
         long size;
         float toffset;
         int nodetype;
@@ -982,6 +777,7 @@ File::File(string pth, long bytes) {
     if(idx != std::string::npos) {
         std::string extension = pth.substr(idx+1);
         std::transform(extension.begin(), extension.end(), extension.begin(), ::towlower);
+        file_extension = extension;
         if (extension == "txt") {
             filetype = TEXT;
         } else if (extension == "png" ||
@@ -1170,6 +966,28 @@ Folder::Folder(string pth, long bytes) {
 Folder root("/home/skyler/", 0);
 void Folder::read(int levelsleft=1) {
     GetFilesInDirectory(children,path,levelsleft);
+    int s = children.size();
+    for (int i=0; i<s; i++) {
+        if ((*children.at(i)).filetype == IMAGE) {
+            printf("%s\n", (*children.at(i)).path.c_str());
+            if (imgmap.find((*children.at(i)).path) == imgmap.end()) {
+                imgcache.push((*children.at(i)).path);
+                if ((*children.at(i)).file_extension == "png") {
+                    imgmap[(*children.at(i)).path] = load_img((*children.at(i)).path.c_str());
+                } else {
+                    imgmap[(*children.at(i)).path] = circle;
+                }
+                    
+                if (imgcache.size()>30) {
+                    string out = imgcache.front();
+                    printf("Popping %s\n", out.c_str());
+                    imgcache.pop();
+                }
+            } else {
+                printf("%s already in cache.\n", (*children.at(i)).path.c_str());
+            }
+        }
+    }
 }
 void Folder::draw(float opacity, int level, bool isSelected) {
     glPushMatrix();
@@ -1194,6 +1012,19 @@ void Folder::draw(float opacity, int level, bool isSelected) {
             draw_img(-128,-128,256,256,play_img.tex,red,green,blue,selectedOpacity);
         }
             
+    } else if (selectedChildIndex!=-1 && (*children.at(selectedChildIndex)).filetype == IMAGE) {
+        if (imgmap.find((*children.at(selectedChildIndex)).path) == imgmap.end()) {
+            draw_img(-128,-128,256,256,circle.tex,red,green,blue,selectedOpacity);
+
+        } else {
+            // draw preview image instead
+            float ar = (float)(imgmap.at((*children.at(selectedChildIndex)).path).width)/(float)(imgmap.at((*children.at(selectedChildIndex)).path).height);
+            float img_width = ar>1 ? 256 : 256*ar;
+            float img_height = ar>1 ? 256/ar : 256;
+
+            draw_img(-img_width/2,-img_height/2,img_width,img_height,imgmap.at((*children.at(selectedChildIndex)).path).tex,1,1,1,selectedOpacity);
+            
+        }
     } else {
         draw_img(-128,-128,256,256,circle.tex,red,green,blue,selectedOpacity);
     }
@@ -1225,12 +1056,11 @@ void Folder::draw(float opacity, int level, bool isSelected) {
         float line1pos = -128*isf;
         float line2pos = -148*isf;
         if (selectedChildIndex == -1) {
-            toffset = -gprint(our_font, toffset, line1pos, name.c_str());
-            gprint (our_font, toffset, line2pos, "%i Items", s);
+            ftprint(&ftgl_font, 0, line1pos, CENTER, name);
         } else {
-            toffset = -gprint(our_font, toffset, line1pos, (*children.at(selectedChildIndex)).name.c_str());
+            ftprint(&ftgl_font, 0, line1pos, CENTER, (*children.at(selectedChildIndex)).name.c_str());
             if ((*children.at(selectedChildIndex)).nodetype==TYPE_FOLDER) {
-                gprint (our_font, toffset, line2pos, "%i Items", (*(Folder*)(children.at(selectedChildIndex))).children.size());
+                ftprint(&ftgl_font, 0, line2pos, CENTER, "%i Items", (*(Folder*)(children.at(selectedChildIndex))).children.size());
             } else {
                 long childsize = (*children.at(selectedChildIndex)).size;
                 string expstr;
@@ -1238,18 +1068,18 @@ void Folder::draw(float opacity, int level, bool isSelected) {
                     if (childsize>1048576) {
                         if (childsize>1073741824) {
                             if (childsize>1099511627776) {
-                               gprint (our_font, toffset, line2pos, "%i TB", childsize/1099511627776);
+                               ftprint (&ftgl_font, 0, line2pos, CENTER, "%i TB", childsize/1099511627776);
                             } else {
-                               gprint (our_font, toffset, line2pos, "%i GB", childsize/1073741824);
+                               ftprint (&ftgl_font, 0, line2pos, CENTER, "%i GB", childsize/1073741824);
                             }
                         } else {
-                           gprint (our_font, toffset, line2pos, "%i MB", childsize/1048576);
+                           ftprint (&ftgl_font, 0, line2pos, CENTER, "%i MB", childsize/1048576);
                         }
                     } else {
-                       gprint (our_font, toffset, line2pos, "%i KB", childsize/1024);
+                       ftprint (&ftgl_font, 0, line2pos, CENTER, "%i KB", childsize/1024);
                     }
                 } else {
-                    gprint (our_font, toffset, line2pos, "%i Bytes", childsize);
+                    ftprint (&ftgl_font, 0, line2pos, CENTER, "%i Bytes", childsize);
                 }
             }
         }
@@ -1403,14 +1233,36 @@ void stop() {
     }
 }
 
+void releaseRoot() {
+    uint s = root.children.size();
+    string parent;
+    uint idx;
+    switch (key) {
+    case 65505: // Shift
+        modifiers = modifiers ^ SHIFT;
+        break;
+    case 65507: // Control
+        modifiers = modifiers ^ CONTROL;
+        break;
+    case 65515: // Meta
+        modifiers = modifiers ^ META;
+        break;
+    case 65513: // Alt
+        modifiers = modifiers ^ ALT;
+        break;
+    default:
+        printf("Keycode %i pressed.\n", (int)key);
+    }
+}
+
 void pressRoot() {
     uint s = root.children.size();
     string parent;
     uint idx;
     switch (key) {
     case 65364: // Down
-        stop()
-;        if (root.selectedChildIndex==-1) {
+        stop();
+        if (root.selectedChildIndex==-1) {
             root.selectedChildIndex = (int)(s/2);
         } else if (root.selectedChildIndex<s/2.0 && root.selectedChildIndex >= 0) {
             root.selectedChildIndex += 1;
@@ -1541,10 +1393,33 @@ void pressRoot() {
                         printf("Selected folder %s\n", (*root.children.at(root.selectedChildIndex)).path.c_str());
                         root = (*((Folder *)(root.children.at(root.selectedChildIndex))));
                         root.read(1);
+                        break;
                 }
             }
         }
+    case 65505: // Shift
+        modifiers = modifiers ^ SHIFT;
+        break;
+    case 65507: // Control
+        modifiers = modifiers ^ CONTROL;
+        break;
+    case 65515: // Meta
+        modifiers = modifiers ^ META;
+        break;
+    case 65513: // Alt
+        modifiers = modifiers ^ ALT;
+        break;
+    case 65288: // Backspace
+        if (userinput.length()>0) {
+            userinput.erase(userinput.length()-1,1);
+            printf("%s\n", userinput.c_str());
+        }
+        break;
     default:
+        char cey = modifiers & SHIFT ? (char)(toupper(key)) : (char)key;
+        userinput.append( &cey );
+        printf("%s\n", userinput.c_str());
+
         break;
     }
 }
@@ -1569,6 +1444,8 @@ static void redrawTheWindow()
     static float b=0;
     static float c=0;
 
+    ftgl_font.FaceSize(24*isf);
+
     glDrawBuffer(GL_BACK);
 
     glViewport(0, 0, width, height);
@@ -1587,7 +1464,7 @@ static void redrawTheWindow()
 
     glEnable(GL_TEXTURE_2D);
     glColor3f(1,1,1);
-    gprint(our_font, 5, 5, root.path.c_str());
+    ftprint(&ftgl_font, 5, 5, LEFT, root.path.c_str());
     glTranslatef(width/2,height/2,0);
     int last_mouse_x = mouse_x;
     int last_mouse_y = mouse_y;
@@ -1696,7 +1573,7 @@ int main(int argc, char *argv[])
     std::string scale_factor_string = exec("dconf read /com/ubuntu/user-interface/scale-factor");
     std::string delimiter = ": ";
     scale_factor_string.erase(0, scale_factor_string.find(delimiter) + delimiter.length());
-    scale_factor_string = scale_factor_string.substr(0,scale_factor_string.find('}'));
+    scale_factor_string = scale_factor_string.substr(0,scale_factor_string.find(','));
     isf = ((float)atoi(scale_factor_string.c_str()))/8;
     printf("Interface scale factor: %f\n", isf);
 
@@ -1711,8 +1588,10 @@ int main(int argc, char *argv[])
     pause_img = load_img("pause.png");
     line = load_img("line.png");
     bar = load_img("bar.png");
-    our_font.init("/usr/share/fonts/truetype/freefont/FreeSans.ttf", (int)(16*isf)); 
-    // our_font.init("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", (int)(16*isf)); 
+
+    // Die if font loading failed
+    if (ftgl_font.Error()) return -1;
+
     root.read(1);
 
     while (updateTheMessageQueue()) {
