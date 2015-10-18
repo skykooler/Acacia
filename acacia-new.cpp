@@ -120,10 +120,11 @@ int playingindex = -1;
 
 float isf; // Interface scale factor
 
-string userinput = "";
+string userinput = string("");
 bool typing = false;
 
 FTGLPixmapFont ftgl_font("/usr/share/fonts/truetype/freefont/FreeSans.ttf");
+FTGLPixmapFont mono_font("/usr/share/fonts/truetype/freefont/FreeMono.ttf");
 static int Xscreen;
 static Atom del_atom;
 static Colormap cmap;
@@ -157,6 +158,13 @@ int CONTROL = 2;
 int ALT = 4;
 int META = 8;
 
+FILE *subprocess;
+bool subprocessOpen = false;
+std::vector<string> outlines;
+
+bool term_input = false;
+
+std::string exec(char const* cmd);
 
 double logbase(double a, double base)
 {
@@ -164,7 +172,7 @@ double logbase(double a, double base)
 }
  
 
-float ftprint(FTPixmapFont *font, float x, float y, int alignment, string text, ...) {
+string format(string text, ...) {
     const char *t = text.c_str();
     char formatted_text[256];
 
@@ -177,22 +185,42 @@ float ftprint(FTPixmapFont *font, float x, float y, int alignment, string text, 
         vsprintf(formatted_text, t, ap);                            // And Converts Symbols To Actual Numbers
         va_end(ap);                                 // Results Are Stored In formatted_text
     }
+    return string(formatted_text);
+}
+
+float ftprint(FTPixmapFont *font, float x, float y, int alignment, string text) {
 
     switch (alignment) {
         case CENTER:
-            glRasterPos2f(x-(*font).Advance(formatted_text)/2, y);
+            glRasterPos2f(x-(*font).Advance(text.c_str())/2, y);
             break;
         case RIGHT:
-            glRasterPos2f(x-(*font).Advance(formatted_text), y);
+            glRasterPos2f(x-(*font).Advance(text.c_str()), y);
             break;
         case LEFT:
         default:
             glRasterPos2f(x,y);
             break;
     }
-    (*font).Render(formatted_text);
+    (*font).Render(text.c_str());
 }
 
+// trim from start
+static inline std::string &ltrim(std::string &s) {
+        s.erase(s.begin(), std::find_if(s.begin(), s.end(), std::not1(std::ptr_fun<int, int>(std::isspace))));
+        return s;
+}
+
+// trim from end
+static inline std::string &rtrim(std::string &s) {
+        s.erase(std::find_if(s.rbegin(), s.rend(), std::not1(std::ptr_fun<int, int>(std::isspace))).base(), s.end());
+        return s;
+}
+
+// trim from both ends
+static inline std::string &trim(std::string &s) {
+        return ltrim(rtrim(s));
+}
 
 struct timeval earlier;
 struct timeval later;
@@ -1060,7 +1088,7 @@ void Folder::draw(float opacity, int level, bool isSelected) {
         } else {
             ftprint(&ftgl_font, 0, line1pos, CENTER, (*children.at(selectedChildIndex)).name.c_str());
             if ((*children.at(selectedChildIndex)).nodetype==TYPE_FOLDER) {
-                ftprint(&ftgl_font, 0, line2pos, CENTER, "%i Items", (*(Folder*)(children.at(selectedChildIndex))).children.size());
+                ftprint(&ftgl_font, 0, line2pos, CENTER, format("%i Items", (*(Folder*)(children.at(selectedChildIndex))).children.size()));
             } else {
                 long childsize = (*children.at(selectedChildIndex)).size;
                 string expstr;
@@ -1068,18 +1096,18 @@ void Folder::draw(float opacity, int level, bool isSelected) {
                     if (childsize>1048576) {
                         if (childsize>1073741824) {
                             if (childsize>1099511627776) {
-                               ftprint (&ftgl_font, 0, line2pos, CENTER, "%i TB", childsize/1099511627776);
+                               ftprint (&ftgl_font, 0, line2pos, CENTER, format("%i TB", childsize/1099511627776));
                             } else {
-                               ftprint (&ftgl_font, 0, line2pos, CENTER, "%i GB", childsize/1073741824);
+                               ftprint (&ftgl_font, 0, line2pos, CENTER, format("%i GB", childsize/1073741824));
                             }
                         } else {
-                           ftprint (&ftgl_font, 0, line2pos, CENTER, "%i MB", childsize/1048576);
+                           ftprint (&ftgl_font, 0, line2pos, CENTER, format("%i MB", childsize/1048576));
                         }
                     } else {
-                       ftprint (&ftgl_font, 0, line2pos, CENTER, "%i KB", childsize/1024);
+                       ftprint (&ftgl_font, 0, line2pos, CENTER, format("%i KB", childsize/1024));
                     }
                 } else {
-                    ftprint (&ftgl_font, 0, line2pos, CENTER, "%i Bytes", childsize);
+                    ftprint (&ftgl_font, 0, line2pos, CENTER, format("%i Bytes", childsize));
                 }
             }
         }
@@ -1250,6 +1278,7 @@ void releaseRoot() {
     case 65513: // Alt
         modifiers = modifiers ^ ALT;
         break;
+
     default:
         printf("Keycode %i pressed.\n", (int)key);
     }
@@ -1259,6 +1288,7 @@ void pressRoot() {
     uint s = root.children.size();
     string parent;
     uint idx;
+    // modifiers = 0;
     switch (key) {
     case 65364: // Down
         stop();
@@ -1302,7 +1332,16 @@ void pressRoot() {
         break;
     case 65293: // Enter
         stop();
-        if (root.selectedChildIndex!=-1) {
+        if (term_input) {
+            // TODO: pass off to bash shell instead of exec'ing in-line
+            // string result = exec(userinput.c_str());
+            // userinput.clear();
+            // printf("%s\n", result.c_str());
+            subprocessOpen = true;
+            subprocess = popen(userinput.c_str(), "r");
+            userinput.clear();
+            outlines.clear();
+        } else if (root.selectedChildIndex!=-1) {
             switch ((*root.children.at(root.selectedChildIndex)).nodetype) {
                 case TYPE_FILE:
                     printf("Selected %s\n", (*root.children.at(root.selectedChildIndex)).path.c_str());
@@ -1329,6 +1368,7 @@ void pressRoot() {
         break;
     case 65307: // Escape
         stop();
+        term_input = false;
         root.selectedChildIndex = -1;
         idx = root.path.rfind('/',root.path.size()-2);
         if(idx != std::string::npos) {
@@ -1340,7 +1380,9 @@ void pressRoot() {
         root.read(1);
         break;
     case 32: // Space
-        if (root.selectedChildIndex!=-1) {
+        if (userinput.length()>0) {
+            userinput.append(" ");
+        } else if (root.selectedChildIndex!=-1) {
             if (playing and paused or playingindex==root.selectedChildIndex) {
                 printf("Pausing\n");
                 fputs("pause\n", mplayer_pipe);
@@ -1397,6 +1439,7 @@ void pressRoot() {
                 }
             }
         }
+        break;
     case 65505: // Shift
         modifiers = modifiers ^ SHIFT;
         break;
@@ -1416,11 +1459,36 @@ void pressRoot() {
         }
         break;
     default:
-        char cey = modifiers & SHIFT ? (char)(toupper(key)) : (char)key;
-        userinput.append( &cey );
-        printf("%s\n", userinput.c_str());
+        if (!term_input && char(key)=='t') {
+            term_input = true;
+            userinput.clear();
+        } else {
+            char cey = modifiers & SHIFT ? (char)(toupper(key)) : (char)key;
+            userinput.append( &cey, 1);
+            printf("%s %i\n", userinput.c_str(), (int)userinput.length());
+        }
 
         break;
+    }
+}
+
+void handleSubprocess() {
+    char buff[128];
+    if (subprocessOpen) {
+        if (!feof(subprocess)) {
+            if (fgets(buff, 128, subprocess) != NULL) {
+                printf("%s", buff);
+                string outline = string(buff);
+                rtrim(outline);
+                outlines.push_back(outline);
+                if (outlines.size()>30) {
+                    outlines.erase(outlines.begin());
+                }
+            }
+        } else {
+            pclose(subprocess);
+            subprocessOpen = false;
+        }
     }
 }
 
@@ -1444,7 +1512,10 @@ static void redrawTheWindow()
     static float b=0;
     static float c=0;
 
+    handleSubprocess();
+
     ftgl_font.FaceSize(24*isf);
+    mono_font.FaceSize(24*isf);
 
     glDrawBuffer(GL_BACK);
 
@@ -1551,7 +1622,21 @@ static void redrawTheWindow()
     b = fmod(b+0.5, 360.);
     c = fmod(c+0.25, 360.);
 
+    /************ Terminal drawing ***********/
+    if (term_input) {
+        glColor4f(1,1,1,1);
+        ftprint(&mono_font, -width/2+100,height/2-100, LEFT, userinput);
+        draw_img(-width/2,height/2-120, mono_font.Advance(userinput.c_str())+200,2,line.tex);
+    }
+    for (std::vector<int>::size_type i=0; i<outlines.size(); i++) {
+        ftprint(&mono_font, -width/2+100, height/2-150-(float)(30*i), LEFT, outlines[i]);
+    }
+
     glXSwapBuffers(Xdisplay, glX_window_handle);
+    // if (window_handle->isActive()) {
+    //     printf("Active\n");
+    // }
+    usleep(20000);
 }
 
 std::string exec(char const* cmd) {
