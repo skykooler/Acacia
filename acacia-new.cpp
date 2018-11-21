@@ -58,6 +58,9 @@
 
 #include <wctype.h>
 
+#include <chrono>
+#include <ctime>
+
 #define USE_CHOOSE_FBCONFIG
 #define PNG_SIG_BYTES 8
 
@@ -224,6 +227,7 @@ static inline std::string &trim(std::string &s) {
 
 struct timeval earlier;
 struct timeval later;
+time_t correctedtime;
 
 struct timezone tz;
 
@@ -1505,6 +1509,7 @@ static void redrawTheWindow()
     gettimeofday(&later,NULL);
     delta_t = min(timeval_diff(NULL,&later,&earlier), (long long int)100000);
     gettimeofday(&earlier,NULL);
+    correctedtime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
 
     float const aspect = (float)width / (float)height;
 
@@ -1544,7 +1549,8 @@ static void redrawTheWindow()
     root.transform();
     root.draw();
 
-    float hour = fmod(((float)(earlier.tv_sec%43200)/3600 - ((float)tz.tz_minuteswest)/60)+12, 12);
+    // float hour = fmod(((float)(earlier.tv_sec%43200)/3600 - ((float)tz.tz_minuteswest)/60)+12, 12);
+    float hour = std::localtime(&correctedtime)->tm_hour%12+fmod((float)(earlier.tv_sec%43200)/3600,1.0f);
 
     float minute = (fmod(earlier.tv_sec + (float)earlier.tv_usec/1000000.0,3600.0)/60.0);
 
@@ -1654,15 +1660,19 @@ std::string exec(char const* cmd) {
 
 int main(int argc, char *argv[])
 {
+    correctedtime = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     gettimeofday(&earlier,&tz);
     std::string scale_factor_string = exec("dconf read /com/ubuntu/user-interface/scale-factor");
     std::string delimiter = ": ";
     scale_factor_string.erase(0, scale_factor_string.find(delimiter) + delimiter.length());
     scale_factor_string = scale_factor_string.substr(0,scale_factor_string.find(','));
     isf = ((float)atoi(scale_factor_string.c_str()))/8;
+    // This broke in Ubuntu 18.04  and apparently there's no alternative.
+    //Give up and make up something that isn't zero, at least.
+    if (isf<0.5) isf = 1;
     printf("Interface scale factor: %f\n", isf);
 
-    printf("Time: %f : %f\n", ((float)(earlier.tv_sec%43200)/3600 - ((float)tz.tz_minuteswest)/60), ((float)(earlier.tv_sec%3600)/60));
+    printf("Time: %f : %f\n", std::localtime(&correctedtime)->tm_hour+fmod((float)(earlier.tv_sec%43200)/3600,1.0f), ((float)(earlier.tv_sec%3600)/60));
 
     mouse_x = -1;
     mouse_y = -1;
