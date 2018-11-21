@@ -191,7 +191,7 @@ string format(string text, ...) {
     return string(formatted_text);
 }
 
-float ftprint(FTPixmapFont *font, float x, float y, int alignment, string text) {
+void ftprint(FTPixmapFont *font, float x, float y, int alignment, string text) {
 
     switch (alignment) {
         case CENTER:
@@ -570,73 +570,11 @@ static int updateTheMessageQueue() {
     return 1;
 }
 
-/*  6----7
-   /|   /|
-  3----2 |
-  | 5--|-4
-  |/   |/
-  0----1
-
-*/
-
-GLfloat cube_vertices[][8] =  {
-    /*  X     Y     Z   Nx   Ny   Nz    S    T */
-    {-1.0, -1.0,  1.0, 0.0, 0.0, 1.0, 0.0, 0.0}, // 0
-    { 1.0, -1.0,  1.0, 0.0, 0.0, 1.0, 1.0, 0.0}, // 1
-    { 1.0,  1.0,  1.0, 0.0, 0.0, 1.0, 1.0, 1.0}, // 2
-    {-1.0,  1.0,  1.0, 0.0, 0.0, 1.0, 0.0, 1.0}, // 3
-
-    { 1.0, -1.0, -1.0, 0.0, 0.0, -1.0, 0.0, 0.0}, // 4
-    {-1.0, -1.0, -1.0, 0.0, 0.0, -1.0, 1.0, 0.0}, // 5
-    {-1.0,  1.0, -1.0, 0.0, 0.0, -1.0, 1.0, 1.0}, // 6
-    { 1.0,  1.0, -1.0, 0.0, 0.0, -1.0, 0.0, 1.0}, // 7
-
-    {-1.0, -1.0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0}, // 5
-    {-1.0, -1.0,  1.0, -1.0, 0.0, 0.0, 1.0, 0.0}, // 0
-    {-1.0,  1.0,  1.0, -1.0, 0.0, 0.0, 1.0, 1.0}, // 3
-    {-1.0,  1.0, -1.0, -1.0, 0.0, 0.0, 0.0, 1.0}, // 6
-
-    { 1.0, -1.0,  1.0,  1.0, 0.0, 0.0, 0.0, 0.0}, // 1
-    { 1.0, -1.0, -1.0,  1.0, 0.0, 0.0, 1.0, 0.0}, // 4
-    { 1.0,  1.0, -1.0,  1.0, 0.0, 0.0, 1.0, 1.0}, // 7
-    { 1.0,  1.0,  1.0,  1.0, 0.0, 0.0, 0.0, 1.0}, // 2
-
-    {-1.0, -1.0, -1.0,  0.0, -1.0, 0.0, 0.0, 0.0}, // 5
-    { 1.0, -1.0, -1.0,  0.0, -1.0, 0.0, 1.0, 0.0}, // 4
-    { 1.0, -1.0,  1.0,  0.0, -1.0, 0.0, 1.0, 1.0}, // 1
-    {-1.0, -1.0,  1.0,  0.0, -1.0, 0.0, 0.0, 1.0}, // 0
-
-    {-1.0, 1.0,  1.0,  0.0,  1.0, 0.0, 0.0, 0.0}, // 3
-    { 1.0, 1.0,  1.0,  0.0,  1.0, 0.0, 1.0, 0.0}, // 2
-    { 1.0, 1.0, -1.0,  0.0,  1.0, 0.0, 1.0, 1.0}, // 7
-    {-1.0, 1.0, -1.0,  0.0,  1.0, 0.0, 0.0, 1.0}, // 6
-};
-
-static void draw_cube(void) {
-    glEnableClientState(GL_VERTEX_ARRAY);
-    glEnableClientState(GL_NORMAL_ARRAY);
-    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-
-    glVertexPointer(3, GL_FLOAT, sizeof(GLfloat) * 8, &cube_vertices[0][0]);
-    glNormalPointer(GL_FLOAT, sizeof(GLfloat) * 8, &cube_vertices[0][3]);
-    glTexCoordPointer(2, GL_FLOAT, sizeof(GLfloat) * 8, &cube_vertices[0][6]);
-
-    glDrawArrays(GL_QUADS, 0, 24);
-}
-
-float const light0_dir[]={0,1,0,0};
-float const light0_color[]={78./255., 80./255., 184./255.,1};
-
-float const light1_dir[]={-1,1,1,0};
-float const light1_color[]={255./255., 220./255., 97./255.,1};
-
-float const light2_dir[]={0,-1,0,0};
-float const light2_color[]={31./255., 75./255., 16./255.,1};
-
 void draw_rect(float x, float y, float w, float h, float r, float g, float b, float a=1) {
     glColor4f(r,g,b,a);
     glDisable(GL_TEXTURE_2D);
-    const GLshort v[8] = { x, y, x+w, y, x+w, y+h, x, y+h };
+    const GLshort v[8] = { (GLshort)x, (GLshort)y, (GLshort)(x+w), (GLshort)y,
+                           (GLshort)(x+w), (GLshort)(y+h), (GLshort)x, (GLshort)(y+h) };
 
     glVertexPointer( 2, GL_SHORT, 0, v );
     glEnableClientState( GL_VERTEX_ARRAY );
@@ -647,7 +585,8 @@ void draw_rect(float x, float y, float w, float h, float r, float g, float b, fl
 void draw_img(float x, float y, float w, float h, GLuint tex,float r=1,float g=1, float b=1, float a=1) {
         glColor4f(r,g,b,a);
         const GLshort t[8] = { 0, 0, 1, 0, 1, 1, 0, 1 };
-        const GLshort v[8] = { x, y, x+w, y, x+w, y+h, x, y+h };
+        const GLshort v[8] = { (GLshort)x, (GLshort)y, (GLshort)(x+w), (GLshort)y,
+                               (GLshort)(x+w), (GLshort)(y+h), (GLshort)x, (GLshort)(y+h) };
 
         glVertexPointer( 2, GL_SHORT, 0, v );
         glEnableClientState( GL_VERTEX_ARRAY );
